@@ -1,0 +1,611 @@
+---
+title: "Suicide Rates Dataset — pre-processing and exploration"
+output: html_document
+---
+
+<!-- Notes on this file
+  - Data now lives in ../data/master.csv (the Kaggle "Suicide Rates Overview
+    1985 to 2016" file); the original read a local copy of the same file.
+  - The pre-processing (drop HDI, exclude 2016, drop country-year) is the
+    same as in the report. The exploration and R logistic models that follow
+    are the original analysis, kept as written.
+-->
+
+Pre-loading the data and pre-processing any missing values
+
+```{r}
+library(tidyverse) # general
+library(ggalt) # dumbbell plots
+library(countrycode) # continent
+library(rworldmap) # quick country-level heat maps
+library(gridExtra) # plots
+library(broom) # significant trends within countries
+
+## Loading dataset
+suicidedata <- read.csv("../data/master.csv")
+
+## Summary statistics 
+Hmisc::describe(suicidedata)
+
+## Too many missing values to draw any conclusions
+## Removing from dataset
+library(dplyr)
+suicidedata <- suicidedata %>% 
+  select(-c(HDI.for.year)) %>%
+  as.data.frame()
+
+## Processing data as nominal factors 
+data_nominal <- c('country', 'sex', 'continent')
+suicidedata[data_nominal] <- lapply(suicidedata[data_nominal], function(x){factor(x)})
+
+# Making age ordinal
+## suicidedata$age <- factor(suicidedata$age, ordered = T, levels = c("5-14", "15-24", "25-34", "35-54", "55-74", "75+"))
+
+
+library(dplyr)
+suicidedata <- suicidedata %>%
+  filter(year != 2016) %>% # I therefore exclude 2016 data
+  select(-country.year)
+```
+Getting key statistics and numbers for Methodology section of the paper.
+```{r}
+## Summary stats for all variables
+summary(suicidedata$suicides_no)
+round(sd(suicidedata$suicides_no,2))
+
+summary(suicidedata$suicides.100k.pop)
+round(sd(suicidedata$suicides.100k.pop,2))
+
+summary(suicidedata$population)
+round(sd(suicidedata$population,2))
+
+summary(suicidedata$gdp_for_year) 
+round(sd(suicidedata$gdp_for_year,2))
+
+## Converting character to numerical
+## suicidedata$gdp_for_year <- as.numeric(suicidedata$gdp_for_year) 
+
+summary(suicidedata$gdp_per_capita)
+round(sd(suicidedata$gdp_per_capita,2))
+
+summary(suicidedata$HDI.for.year) ## Removed once we remove column
+round(sd(suicidedata$HDI.for.year,2))
+```
+
+Calculating a global average
+```{r}
+global_average <- (sum(as.numeric(suicidedata$suicides_no)) / sum(as.numeric(suicidedata$population))) * 100000
+global_average
+
+median(suicidedata$suicides_no)
+
+```
+
+##### Testing numerical variables for normality
+
+Determining the distribution of suicide count. 
+
+```{r}
+## Plotting values 
+x <- suicidedata$suicides_no
+h<-hist(x, 
+ breaks=12,
+ col="blue",
+ xlab="Suicide Counts",
+ main="Distribution of Suicie Counts Globally")
+
+xfit<-seq(min(x), max(x), length=40)
+yfit<-dnorm(xfit, mean=mean(x), sd=sd(x))
+yfit <- yfit*diff(h$mids[1:2])*length(x)
+lines(xfit, yfit, col="red", lwd=2)
+box()
+
+## Removing outliers and re-plotting
+Q <- quantile(suicidedata$suicides_no, probs=c(.25, .75), na.rm = FALSE)
+iqr <- IQR(suicidedata$suicides_no)
+up <-  Q[2]+1.5*iqr # Upper Range  
+low<- Q[1]-1.5*iqr # Lower Range
+
+suicidecountoutliers <- subset(suicidedata, suicidedata$suicides_no > (Q[1] - 1.5*iqr) & suicidedata$suicides_no  < (Q[2]+1.5*iqr))
+
+x <- suicidecountoutliers$suicides_no
+h<-hist(x, 
+ breaks=12,
+ col="blue",
+ xlab="Pressure",
+ main="Pressure Distribution")
+
+xfit<-seq(min(x), max(x), length=40)
+yfit<-dnorm(xfit, mean=mean(x), sd=sd(x))
+yfit <- yfit*diff(h$mids[1:2])*length(x)
+lines(xfit, yfit, col="red", lwd=2)
+box()
+
+#skewness and kurtosis from semTools with standard error 
+tpskew<-semTools::skew(suicidedata$suicides_no)
+tpkurt<-semTools::kurtosis(suicidedata$suicides_no)
+#We divide the skew statistic by the standard error to get the standardised score
+tpskew[1]/tpskew[2]
+tpkurt[1]/tpkurt[2]
+
+```
+
+
+Determining the distribution of suicide per 100k in population
+
+```{r}
+
+## Plotting values 
+x <- suicidedata$suicides.100k.pop
+h<-hist(x, 
+ breaks=12,
+ col="blue",
+ xlab="Suicide Rates Per 100k Population",
+ main="Distribution of Suicie Rates Globally")
+
+xfit<-seq(min(x), max(x), length=40)
+yfit<-dnorm(xfit, mean=mean(x), sd=sd(x))
+yfit <- yfit*diff(h$mids[1:2])*length(x)
+lines(xfit, yfit, col="red", lwd=2)
+box()
+
+## Removing outliers and re-plotting
+Q <- quantile(suicidedata$suicides.100k.pop, probs=c(.25, .75), na.rm = FALSE)
+iqr <- IQR(suicidedata$suicides.100k.pop)
+up <-  Q[2]+1.5*iqr # Upper Range  
+low<- Q[1]-1.5*iqr # Lower Range
+
+suicide100koutliers <- subset(suicidedata, suicidedata$suicides.100k.pop > (Q[1] - 1.5*iqr) & suicidedata$suicides.100k.pop  < (Q[2]+1.5*iqr))
+
+x <- suicide100koutliers$suicides.100k.pop
+h<-hist(x, 
+ breaks=12,
+ col="blue",
+ xlab="Suicide Rates Per 100k Population",
+ main="Suicide Rates Per 100k Population Distribution")
+
+xfit<-seq(min(x), max(x), length=40)
+yfit<-dnorm(xfit, mean=mean(x), sd=sd(x))
+yfit <- yfit*diff(h$mids[1:2])*length(x)
+lines(xfit, yfit, col="red", lwd=2)
+box()
+
+#skewness and kurtosis 
+tpskew<-semTools::skew(suicidedata$suicides.100k.pop)
+tpkurt<-semTools::kurtosis(suicidedata$suicides.100k.pop)
+#We divide the skew statistic by the standard error to get the standardised score
+tpskew[1]/tpskew[2]
+tpkurt[1]/tpkurt[2]
+
+#Create a qqplot
+qqnorm(suicidedata$suicides.100k.pop)
+qqline(suicidedata$suicides.100k.pop, col=2) #show a line on theplot
+
+
+
+## Normalize data
+View(suicidedata)
+
+normalize <- function(x) {
+return ((x - min(x)) / (max(x) - min(x)))
+}
+suicidedata$suicides.100k.pop_norm<-normalize(suicidedata$suicides.100k.pop)
+
+#skewness and kurtosis 
+tpskew<-semTools::skew(suicidedata$suicides.100k.pop_norm)
+tpkurt<-semTools::kurtosis(suicidedata$suicides.100k.pop_norm)
+#We divide the skew statistic by the standard error to get the standardised score
+tpskew[1]/tpskew[2]
+tpkurt[1]/tpkurt[2]
+
+
+Q <- quantile(suicidedata$suicides.100k.pop_norm, probs=c(.25, .75), na.rm = FALSE)
+iqr <- IQR(suicidedata$suicides.100k.pop_norm)
+up <-  Q[2]+0.1*iqr # Upper Range of +3.29 cut off
+low<- Q[1]-2.5*iqr # Lower Range of +1.96 cut off
+
+suicide100koutliers2 <- subset(suicidedata, suicidedata$suicides.100k.pop_norm > (Q[1] - 2.5*iqr) & suicidedata$suicides.100k.pop_norm  < (Q[2]+0.1*iqr))
+
+x <- suicide100koutliers2$suicides.100k.pop_norm
+h<-hist(x, 
+ breaks=12,
+ col="blue",
+ xlab="Suicide Rates Per 100k Population",
+ main="Suicide Rates Per 100k Population Distribution")
+
+xfit<-seq(min(x), max(x), length=40)
+yfit<-dnorm(xfit, mean=mean(x), sd=sd(x))
+yfit <- yfit*diff(h$mids[1:2])*length(x)
+lines(xfit, yfit, col="red", lwd=2)
+box()
+
+```
+
+
+```{r}
+## Plotting values 
+x <- suicidedata$population
+h<-hist(x, 
+ breaks=12,
+ col="blue",
+ xlab="Population",
+ main="Distribution of Population Globally")
+
+xfit<-seq(min(x), max(x), length=40)
+yfit<-dnorm(xfit, mean=mean(x), sd=sd(x))
+yfit <- yfit*diff(h$mids[1:2])*length(x)
+lines(xfit, yfit, col="red", lwd=2)
+box()
+
+## Removing outliers and re-plotting
+Q <- quantile(suicidedata$population, probs=c(.25, .75), na.rm = FALSE)
+iqr <- IQR(suicidedata$population)
+up <-  Q[2]+1.5*iqr # Upper Range  
+low<- Q[1]-1.5*iqr # Lower Range
+
+populationkoutliers <- subset(suicidedata, suicidedata$population > (Q[1] - 1.5*iqr) & suicidedata$population  < (Q[2]+1.5*iqr))
+
+x <- suicide100koutliers$population
+h<-hist(x, 
+ breaks=12,
+ col="blue",
+ xlab="Population",
+ main="Population Distribution")
+
+xfit<-seq(min(x), max(x), length=40)
+yfit<-dnorm(xfit, mean=mean(x), sd=sd(x))
+yfit <- yfit*diff(h$mids[1:2])*length(x)
+lines(xfit, yfit, col="red", lwd=2)
+box()
+
+#Skewness and Kurtosis 
+tpskew<-semTools::skew(suicidedata$population)
+tpkurt<-semTools::kurtosis(suicidedata$population)
+#We divide the skew statistic by the standard error to get the standardised score
+tpskew[1]/tpskew[2]
+tpkurt[1]/tpkurt[2]
+
+```
+```{r}
+## Plotting values 
+x <- suicidedata$gdp_per_capita....
+h<-hist(x, 
+ breaks=12,
+ col="blue",
+ xlab="GDP Per Capita",
+ main="Distribution of GDP Per Capita Globally")
+
+xfit<-seq(min(x), max(x), length=40)
+yfit<-dnorm(xfit, mean=mean(x), sd=sd(x))
+yfit <- yfit*diff(h$mids[1:2])*length(x)
+lines(xfit, yfit, col="red", lwd=2)
+box()
+
+#Skewness and Kurtosis 
+tpskew<-semTools::skew(suicidedata$gdp_per_capita....)
+tpkurt<-semTools::kurtosis(suicidedata$gdp_per_capita....)
+#We divide the skew statistic by the standard error to get the standardised score
+tpskew[1]/tpskew[2]
+tpkurt[1]/tpkurt[2]
+
+
+```
+Boxplots to visualise the sucide rate for each age group and gender
+
+```{r}
+## Grouping gender and summary of median votes 
+suicidedata %>% group_by(age) %>% summarise(median(suicides.100k.pop))
+
+## Plotting Age and Gender and suicide rate
+
+qplot(data = suicidedata, reorder(age, suicides.100k.pop), y = suicides.100k.pop, geom = 'boxplot',
+ varwidth=TRUE, show.legend = FALSE,
+fill=sex,
+ main="Suicide Rates Among Age",
+ xlab="Age",
+ ylab="Sucide Rate")
+
+```
+### Differences - Non-Parametric Tests
+
+Mann Whitney U Test
+
+Using Mann Whitney U test we found there was a stat significant for gender and suicide
+
+W = 53248014, p-value < 2.2e-16
+
+```{r}
+psych::describeBy(suicidedata$suicides.100k.pop,group=suicidedata$sex)
+
+#Create data subsets for each sex
+femaledata <- subset(suicidedata, sex=="female")
+maledata <-subset(suicidedata, sex=='male')
+
+#Create plots of these
+gs <- ggplot(femaledata, aes(x=suicides.100k.pop))
+gs <- gs + labs(x="Female")
+gs <- gs + geom_histogram(binwidth=2, colour="black", aes(y=..density.., fill=..count..))
+gs <- gs + scale_fill_gradient("Count", low="#DCDCDC", high="#7C7C7C")
+gs <- gs + stat_function(fun=dnorm, color="red",args=list(mean=mean(femaledata$suicides.100k.pop, na.rm=TRUE), sd=sd(femaledata$suicides.100k.pop, na.rm=TRUE)))
+gs
+
+gs <- ggplot(maledata, aes(x=suicides.100k.pop))
+gs <- gs + labs(x="Male")
+gs <- gs + geom_histogram(binwidth=2, colour="black", aes(y=..density.., fill=..count..))
+gs <- gs + scale_fill_gradient("Count", low="#DCDCDC", high="#7C7C7C")
+gs <- gs + stat_function(fun=dnorm, color="red",args=list(mean=mean(maledata$suicides.100k.pop, na.rm=TRUE), sd=sd(maledata$suicides.100k.pop, na.rm=TRUE)))
+gs
+
+# Test for differences in gender
+stats::wilcox.test(suicides.100k.pop~sex, data=suicidedata) 
+```
+
+Using the Kruskal-Wallis chi-squared test we found there was a stat sig for age and suicide
+
+Kruskal-Wallis chi-squared = 7008.9, df = 5, p-value < 2.2e-16
+
+One Way Anova (lecture 06_Difference_II). F = 909.79, p <.001
+[F(5, 27814) = 909.79, p = <.001]. 
+
+All age groups have a statistical significance on suicide. 
+
+```{r}
+## Stats
+psych::describeBy(suicidedata$suicides.100k.pop,group=suicidedata$age)
+
+# Test for differences in age
+stats::kruskal.test(suicides.100k.pop~age, data=suicidedata) 
+
+## One Way ANOVA 
+library(userfriendlyscience)
+library(ppcor)
+library(olsrr)
+one.way <- oneway(suicidedata$age , y = suicidedata$suicides.100k.pop , posthoc = 'Tukey')
+one.way
+
+```
+
+#### Testing for correlations for non-parametric variables
+
+All our variables are non-normally distributed so we will use Spearman.
+
+Correlation between suicide rate per 100k and GDP per capita.  p-value < 2.2e-16 and  rho = 0.07306332.
+
+Correlation betweensuicide rate per 100k and population size. S = 2.8166e+12, p-value < 2.2e-16 and  rho = 0.2151278.
+
+```{r}
+cor.test(suicidedata$suicides.100k.pop, suicidedata$gdp_per_capita...., method = "spearman")
+
+cor.test(suicidedata$suicides.100k.pop, suicidedata$population, method = "spearman")
+
+```
+
+
+#### Assumptions 
+```{r}
+library(userfriendlyscience)
+library(ppcor)
+library(olsrr)
+
+library(car)
+car::leveneTest(suicides.100k.pop ~ sex, data=suicidedata)
+
+```
+
+
+#### Building Log Model 1
+
+Model baseline
+
+The Chi-square stat is 6370, df = 1, which is statiscally signficant (p < 0.001)
+
+Deviance Residuals: 
+    Min       1Q   Median       3Q      Max  
+-1.5707  -1.0446   0.4148   0.9327   4.6959  
+
+AIC: 32200
+
+```{r}
+library("car")
+library("stargazer")
+
+
+
+suicidedata$sex = recode(suicidedata$sex,"'female' = 1; 'male' = 0")
+
+logmodel1 <- lm(suicides.100k.pop ~ sex, data=suicidedata, na.action=na.exclude, family=binomial())
+logmodel1
+
+lmtest::lrtest(logmodel1)
+summary(logmodel1)
+stargazer(logmodel1, type="text")
+```
+Testing linear
+```{r}
+
+library("car")
+library("stargazer")
+
+suicidedata$sex = recode(suicidedata$sex,"'female' = 1; 'male' = 0")
+
+lmodel1 = lm(suicidedata$suicides.100k.pop~suicidedata$sex)
+stargazer(lmodel1 , type="text")
+
+#Check assumptions
+#Cooks distance
+cooks.distance(lmodel1)
+#Plot Cooks distance
+plot(cooks.distance(lmodel1), ylab="Cook's statistic")
+
+#Create histogram
+#A density plot of the residuals
+plot(density(resid(lmodel1))) 
+
+#Create a QQ plotqqPlot(model, main="QQ Plot") #qq plot for studentized resid 
+leveragePlots(lmodel1) # leverage plots
+
+## The mean of residuals is zero
+mean(lmodel1$residuals)
+
+plot(lmodel1)
+
+## The variability in X values is positive
+var(suicidedata$suicides.100k.pop)  
+
+## The X variables and residuals are uncorrelated
+cor.test(suicidedata$suicides.100k.pop, lmodel1$residuals)
+
+#Collinearity
+vifmodel<-vif(lmodel1)
+#Calculate tolerance
+1/vifmodel
+
+```
+
+```{r}
+lmodel1a <- lm(suicides.100k.pop ~ sex, data=suicidedata[-c(1259, 22281, 24333,20543,11377,20531,13689), ])
+gvlma::gvlma(lmodel1a)
+plot(lmodel1a)
+```
+
+
+
+
+Check later ofr LG
+```{r}
+## Zone in on Chi for the model to check for improvement
+modelChi <- logmodel1$null.deviance - logmodel1$deviance
+modelChi
+
+## Zone in on Degrees of freedom for our model (will usually be 1)
+chidf <- logmodel1$df.null - logmodel1$df.residual
+chidf
+
+## Zone in on Chi for getting the probability or no model pr baseline
+chisq.prob <- 1 - pchisq(modelChi, chidf)
+chisq.prob
+
+## Test for pseudo R2 and chi square.
+## R Squared is tiny
+rcompanion::nagelkerke(logmodel1, restrictNobs = T)
+
+## Exponential coefficients.
+## Factor % 
+exp(coefficients(logmodel1))
+
+## Plot a ROC curve and look for specificity and sensitivity.
+## We want to look at the Area under the curve
+## .5 is weak, .8 is strong
+Epi::ROC(form=suicidedata$sex ~ suicidedata$suicides.100k.pop, plot="ROC")
+```
+```{r}
+library(foreign) #To work with SPSS data
+library(lmSupport)#Extra functions for linear model (may require install of nloptr also)
+library(lm.beta)
+library(stargazer)#pretty print regression output
+library(dplyr)
+library(ppcor)
+library(car)
+
+#Check assumptions
+#Cooks distance
+cooks.distance(model1)
+```
+
+
+#### Building Model 2
+
+Adding in age
+
+The Chi-square stat is 7911.87, df = 6, which is statistically significant (p < 0.001)
+
+Cox and Snell R2 and Nagelkerke R2 are pseudo R2 statistics - in this case they indicate that between 20% and 33% of the variance is explained by age.
+
+
+```{r}
+library("car")
+library("stargazer")
+
+logmodel2 <- glm(sex ~ suicides.100k.pop + age, data=suicidedata, na.action=na.exclude, family=binomial())
+logmodel2
+
+lmtest::lrtest(logmodel2)
+summary(logmodel2)
+stargazer(logmodel2, type="text")
+```
+
+
+```{r}
+## Zone in on Chi for the model to check for improvement
+modelChi <- logmodel2$null.deviance - logmodel2$deviance
+modelChi
+
+## Zone in on Degrees of freedom for our model (will usually be 1)
+chidf <- logmodel2$df.null - logmodel2$df.residual
+chidf
+
+## Zone in on Chi for getting the probability or no model pr baseline
+chisq.prob <- 1 - pchisq(modelChi, chidf)
+chisq.prob
+```
+
+```{r}
+## Test for pseudo R2 and chi square.
+## R Squared is tiny
+rcompanion::nagelkerke(logmodel2, restrictNobs = T)
+
+## Exponential coefficients.
+## Factor % 
+exp(coefficients(logmodel2))
+
+#Collinearity
+vifmodel2 <- vif(logmodel2)
+1/vifmodel2 
+sqrt(vif(logmodel2)) 
+```
+
+#### Building Model 3
+
+Adding in GDP
+
+```{r}
+library("car")
+library("stargazer")
+
+logmodel3 <- glm(sex ~ suicides.100k.pop + age + gdp_per_capita...., data=suicidedata, na.action=na.exclude, family=binomial())
+logmodel3
+
+lmtest::lrtest(logmodel3)
+summary(logmodel3)
+stargazer(logmodel3, type="text")
+```
+
+
+```{r}
+## Zone in on Chi for the model to check for improvement
+modelChi <- logmodel3$null.deviance - logmodel3$deviance
+modelChi
+
+## Zone in on Degrees of freedom for our model (will usually be 1)
+chidf <- logmodel3$df.null - logmodel3$df.residual
+chidf
+
+## Zone in on Chi for getting the probability or no model pr baseline
+chisq.prob <- 1 - pchisq(modelChi, chidf)
+chisq.prob
+```
+
+```{r}
+## Test for pseudo R2 and chi square.
+## R Squared is tiny
+rcompanion::nagelkerke(logmodel3, restrictNobs = T)
+
+## Exponential coefficients.
+## Factor % 
+exp(coefficients(logmodel3))
+
+#Collinearity
+vifmodel3 <- vif(logmodel3)
+1/vifmodel3 
+sqrt(vif(logmodel3))  
+```
